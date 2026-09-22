@@ -3,9 +3,8 @@
 """
 Husqvarna API Module
 
-This module provides a Python interface to the Husqvarna Automower API, allowing control
-and monitoring of Husqvarna robotic lawn mowers. It handles authentication, API requests,
-rate limiting, and various mower operations.
+This module provides a Python interface to the Husqvarna Automower API for monitoring
+robotic lawn mowers. It handles authentication, API requests, and rate limiting.
 
 Based on the official Husqvarna API:
 https://developer.husqvarnagroup.cloud/
@@ -17,7 +16,7 @@ Version: 2.0.0
 import time
 import httpx
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Tuple, cast
+from typing import Dict, List, Optional, Any
 from enum import Enum
 from dataclasses import dataclass, field
 import json
@@ -59,14 +58,6 @@ class HttpMethod(Enum):
     """HTTP methods used for API requests."""
     POST = 0
     GET = 1
-
-class MowerAction(str, Enum):
-    """Actions that can be sent to the mower."""
-    PARK_NEXT_SCHEDULE = 'ParkUntilNextSchedule'
-    PARK_FURTHER_NOTICE = 'ParkUntilFurtherNotice'
-    RESUME_SCHEDULE = 'ResumeSchedule'
-    START = 'Start'
-    PAUSE = 'Pause'
 
 @dataclass
 class ApiState:
@@ -289,9 +280,9 @@ class ErrorCodes:
 
 class Husqvarna:
     """
-    Husqvarna API client for controlling and monitoring Automower devices.
+    Husqvarna API client for monitoring Automower devices.
     This class provides methods to authenticate with the Husqvarna API,
-    retrieve mower information, and send commands to mowers.
+    retrieve mower information, and report API errors.
     """
     
     def __init__(self, client_id: str, client_secret: str):
@@ -316,14 +307,6 @@ class Husqvarna:
         """
         # log(f'Husqvarna object returns {self.state.authenticated}.')
         return self.state.authenticated
-
-    def __enter__(self) -> 'Husqvarna':
-        """Context manager entry point."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit - ensure the session is closed."""
-        self.close()
 
     def _create_session(self) -> httpx.Client:
         """
@@ -351,25 +334,6 @@ class Husqvarna:
                 return True
         return False
 
-    def get_mower_messages(self, mower_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Get messages for a specific mower.
-        Args:
-            mower_name: Name of the mower
-        Returns:
-            Optional[Dict[str, Any]]: Messages if available, None otherwise
-        """
-        if not self._check_access_token_and_renew():
-            return None
-
-        if ( mower_id := self._find_id_from_name(mower_name) ):
-            return self._http_with_retry(
-                HttpMethod.GET,
-                f'{ApiEndpoints.MOWERS}/{mower_id}/messages',
-                mower_name=mower_name
-            )
-        return None
-
     def get_mowers_info(self) -> bool:
         """
         Get detailed information for all mowers.
@@ -380,137 +344,6 @@ class Husqvarna:
             return self._get_mower_detailed_info()
         return False
 
-    def get_mower_from_name(self, mower_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Get mower data by name.
-        Args:
-            mower_name: Name of the mower
-        Returns:
-            Optional[Dict[str, Any]]: Mower data if found, None otherwise
-        """
-        for mower in self.mowers:
-            if mower.get('name') == mower_name:
-                return mower
-        return None
-
-    def action_ParkUntilNextSchedule(self, mower_name: str) -> bool:
-        """
-        Command the mower to park until the next scheduled mowing session.
-        Args:
-            mower_name: Name of the mower
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        return self._send_action_to_mower(mower_name, MowerAction.PARK_NEXT_SCHEDULE)
-
-    def action_ParkUntilFurtherNotice(self, mower_name: str) -> bool:
-        """
-        Command the mower to park until manually started again.
-        Args:
-            mower_name: Name of the mower
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        return self._send_action_to_mower(mower_name, MowerAction.PARK_FURTHER_NOTICE)
-
-    def action_Pause(self, mower_name: str) -> bool:
-        """
-        Pause the mower's current operation.
-        Args:
-            mower_name: Name of the mower
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        return self._send_action_to_mower(mower_name, MowerAction.PAUSE)
-
-    def action_ResumeSchedule(self, mower_name: str) -> bool:
-        """
-        Resume the mower's normal schedule.
-        Args:
-            mower_name: Name of the mower
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        return self._send_action_to_mower(mower_name, MowerAction.RESUME_SCHEDULE)
-
-    def action_Start(self, mower_name: str, duration: int = 60) -> bool:
-        """
-        Start mowing for a specified duration.
-        Args:
-            mower_name: Name of the mower
-            duration: Mowing duration in minutes (default: 60)
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        return self._send_action_to_mower(mower_name, MowerAction.START, duration=duration)
-
-    def set_headlight(self, mower_name: str, light: bool) -> bool:
-        """
-        Set the mower's headlight state.
-        Args:
-            mower_name: Name of the mower
-            light: True to turn on, False to turn off
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self._check_access_token_and_renew():
-            return False
-
-        if ( mower_id := self._find_id_from_name(mower_name) ):
-            headlight_mode = 'ALWAYS_ON' if light else 'ALWAYS_OFF'
-            json_payload = {
-                'data': {
-                    'type': 'settings',
-                    'attributes': {
-                        'headlight': {
-                            'mode': headlight_mode
-                        }
-                    }
-                }
-            }
-            
-            self.session.headers.update({'Content-Type': 'application/vnd.api+json'})
-            response = self._http_with_retry(
-                HttpMethod.POST,
-                f'{ApiEndpoints.MOWERS}/{mower_id}/settings',
-                json_post_data=json_payload,
-                mower_name=mower_name
-            )
-            return bool(response)
-        return False
-
-    def set_cutting_height(self, mower_name: str, height: float) -> bool:
-        """
-        Set the mower's cutting height.
-        Args:
-            mower_name: Name of the mower
-            height: Cutting height in centimeters
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        if not self._check_access_token_and_renew():
-            return False
-
-        if ( mower_id := self._find_id_from_name(mower_name) ):
-            json_payload = {
-                'data': {
-                    'type': 'settings',
-                    'attributes': {
-                        'cuttingHeight': height
-                    }
-                }
-            }
-            
-            self.session.headers.update({'Content-Type': 'application/vnd.api+json'})
-            response = self._http_with_retry(
-                HttpMethod.POST,
-                f'{ApiEndpoints.MOWERS}/{mower_id}/settings',
-                json_post_data=json_payload,
-                mower_name=mower_name
-            )
-            return bool(response)
-        return False
-
     def get_timestamp_last_update_mower_list(self) -> datetime:
         """
         Get the timestamp of the last update of the mower list.
@@ -518,22 +351,6 @@ class Husqvarna:
             datetime: Timestamp of last update
         """
         return self.state.timestamp_last_update_mower_list
-
-    def is_mower_off(self, name_or_mower: Union[str, Dict[str, Any]]) -> Optional[bool]:
-        """
-        Check if a mower is in the OFF state.
-        Args:
-            name_or_mower: Either the mower name or a mower dict
-        Returns:
-            Optional[bool]: True if off, False if on, None if mower not found
-        """
-        if isinstance(name_or_mower, dict):
-            mower = name_or_mower
-        else:
-            mower = self.get_mower_from_name(name_or_mower)
-        if mower:
-            return mower.get('state') == State.OFF.name
-        return None
 
     def are_all_mowers_off(self) -> bool:
         """
@@ -699,13 +516,6 @@ class Husqvarna:
                     self.mowers[index]['activity'] = attributes.get('mower', {}).get('activity')
                     self.mowers[index]['state'] = attributes.get('mower', {}).get('state')
                     
-                    # Position information
-                    positions = attributes.get('positions', [])
-                    self.mowers[index]['location'] = positions[0] if positions else None
-                    
-                    # Settings
-                    self.mowers[index]['cutting_height'] = attributes.get('settings', {}).get('cuttingHeight', 0)
-
                     # Schedule information
                     planner = attributes.get('planner', {})
                     self.mowers[index]['planner'] = {}
@@ -733,79 +543,6 @@ class Husqvarna:
                 break
                 
         return status
-
-    def _send_action_to_mower(
-        self, 
-        mower_name: str, 
-        action: MowerAction, 
-        duration: int = 60
-    ) -> bool:
-        """
-        Send a command action to a mower.
-        Args:
-            mower_name: Name of the mower
-            action: The action to perform
-            duration: Duration in minutes for timed actions (default: 60)
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # Validate the action
-        if action not in [
-            MowerAction.PARK_NEXT_SCHEDULE,
-            MowerAction.PARK_FURTHER_NOTICE,
-            MowerAction.PAUSE,
-            MowerAction.RESUME_SCHEDULE,
-            MowerAction.START
-        ]:
-            log(f"Unknown action requested: {action}")
-            return False
-            
-        # Check token and get mower ID
-        if not self._check_access_token_and_renew():
-            return False
-            
-        mower_id = self._find_id_from_name(mower_name)
-        if not mower_id:
-            return False
-            
-        # Prepare payload
-        if action == MowerAction.START:
-            json_payload = {
-                'data': {
-                    'type': action,
-                    'attributes': {
-                        'duration': duration
-                    }
-                }
-            }
-        else:
-            json_payload = {
-                'data': {
-                    'type': action
-                }
-            }
-            
-        # Send the command
-        self.session.headers.update({'Content-Type': 'application/vnd.api+json'})
-        response = self._http_with_retry(
-            HttpMethod.POST,
-            f'{ApiEndpoints.MOWERS}/{mower_id}/actions',
-            json_post_data=json_payload,
-            mower_name=mower_name
-        )
-        
-        return bool(response)
-
-    def _find_id_from_name(self, name: str) -> Optional[str]:
-        """
-        Find a mower's ID from its name.
-        Args:
-            name: Mower name
-        Returns:
-            Optional[str]: Mower ID if found, None otherwise
-        """
-        mower = self.get_mower_from_name(name)
-        return mower.get('id') if mower else None
 
     def _analyze_http_error(
         self, 
@@ -851,7 +588,6 @@ class Husqvarna:
         self, 
         method: HttpMethod, 
         url: str, 
-        json_post_data: Optional[Dict[str, Any]] = None, 
         post_data: Optional[Dict[str, Any]] = None, 
         mower_name: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -860,7 +596,6 @@ class Husqvarna:
         Args:
             method: HTTP method (GET or POST)
             url: Request URL
-            json_post_data: Optional JSON data for POST requests
             post_data: Optional form data for POST requests
             mower_name: Optional mower name for context
         Returns:
@@ -884,7 +619,6 @@ class Husqvarna:
                 else:  # method == HttpMethod.POST
                     response = self.session.post(
                         url, 
-                        json=json_post_data, 
                         data=post_data, 
                         timeout=ApiConfig.TIMEOUT
                     )
@@ -899,8 +633,7 @@ class Husqvarna:
                     
                 elif response.status_code == 403:
                     # Authentication error (403) - retry a few times
-                    # Following the exchange with the helpdesk openapi.servicedesk@husqvarnagroup.com, there
-                    # are regularly timeouts on the commands that translates also in an authentication error. Hence adding also retries...
+                    # The API can transiently return authentication errors, so retry them.
                     log(f"Retry {retry_counter} - Authentication error (403) for url {url}. Retrying...")
                     retry_counter += 1
                     if retry_counter >= 3:
@@ -958,36 +691,3 @@ class Husqvarna:
         # End
         return None
 
-
-if __name__ == "__main__":
-    """
-    Example usage of the Husqvarna API client.
-    This will authenticate, get mower information, and continuously
-    monitor mower status if run directly.
-    """
-    # Example credentials - replace with your own
-    CLIENT_ID = 'xxx'
-    CLIENT_SECRET = 'yyy'
-    
-    husq = Husqvarna(CLIENT_ID, CLIENT_SECRET)
-    
-    if husq:
-        if husq.get_mowers() and husq.get_mowers_info():
-            print(husq.mowers)
-            #print(f"Execute ParkUntilFurtherNotice: {husq.action_ParkUntilFurtherNotice(husq.mowers[0]['name'])} - {husq.get_http_error()}")
-        else:
-            print(f'Error getting mower information: {husq.get_http_error()}')
-            
-        # Continuous monitoring example
-        while True:
-            print(f'are_all_mowers_off: {husq.are_all_mowers_off()}')
-            
-            if husq.get_mowers_info():
-                print(f'({datetime.now()}) {husq.mowers}')
-                print(f"Get messages: {husq.get_mower_messages(husq.mowers[0]['name'])} - {husq.get_http_error()}")
-            else:
-                print(f'({datetime.now()}) Error getting mower information: {husq.get_http_error()}')
-                
-            time.sleep(30)
-    else:
-        print(husq.get_http_error())
