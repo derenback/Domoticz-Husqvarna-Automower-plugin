@@ -1,0 +1,6 @@
+# Local runtime / generated files
+__pycache__/
+*.py[cod]
+*.log
+
+

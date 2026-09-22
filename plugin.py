@@ -32,7 +32,7 @@ import DomoticzEx as Domoticz
 from domoticzEx_tools import (
     DomoticzConstants, dump_config_to_log, update_device, timeout_device,
     check_activity_units_and_timeout, get_device_s_value, get_device_n_value,
-    get_unit, get_distance, log_backtrace_error
+    get_unit, log_backtrace_error
 )
 
 # Local imports
@@ -50,11 +50,10 @@ import Husqvarna
         <ul>
             <li><b>Real-time Status Monitoring:</b> View your mower's current state (e.g., mowing, charging, parked, paused, off).</li>
             <li><b>Battery Level Indication:</b> Keep track of your mower's battery percentage.</li>
-            <li><b>Location Tracking:</b> Based on GPS coordinates of your mower, with an option to display its proximity to predefined zones (e.g., "Front Garden", "Back Garden").</li>
+            <li><b>Location Tracking:</b> Based on GPS coordinates of your mower.</li>
             <li><b>Remote Control Actions:</b> Start mowing, pause operations, resume schedules, or park the mower (until further notice or next schedule).</li>
             <li><b>Cutting Height Adjustment:</b> Remotely set the cutting height of your mower.</li>
             <li><b>Next Schedule:</b> Shows the next upcoming scheduled mowing session.</li>
-            <li><b>Zone Management:</b> Define custom zones for your property to get distance information and easily identify which zone your mower is currently in.</li>
         </ul>
         <p>The RUN device generates a command <b>resume schedule</b> (ON) and <b>park until further notice</b> (OFF). For a fluent integration and the ability to use the timer mechanism of Domoticz to manage the Husqvarna mower, define a full-day schedule (00:00-24:00) on the mower or in the Husqvarna app for the complete week.</p>
         <br/>
@@ -67,11 +66,10 @@ import Husqvarna
         </ul>
         <br/>
         <h2>Advanced Configuration (Husqvarna.json)</h2>
-        <p>For advanced configurations such as defining specific zones for your mower or setting custom cutting height ranges, an optional configuration file named `Husqvarna.json` can be placed in the plugin's home folder.</p>
+        <p>For advanced configurations such as setting custom cutting height ranges or update timing, an optional configuration file named Husqvarna.json can be placed in the plugin's home folder.</p>
         <h3>Husqvarna.json content</h3>
         <ul>
-            <li><b>zones:</b> List of dictionaries, defining a name of a zone and the coordinates of its center. The name of the zone is logged in Location device depending on the mowers location.</li>
-            <li><b>height_min_max (cm):</b> Convertion table of the mowing height steps to centimeter. The number of steps can be found in the Husqvarna Mower App.</li>
+            <li><b>height_min_max (cm):</b> Conversion table of the mowing height steps to centimeter. The number of steps can be found in the Husqvarna Mower App.</li>
             <li><b>update_interval (min):</b> Definition of interval time for mower updates in special cases/periods (eg mower is OFF, quota errors, ...).</li>
             <li><b>start_duration (min):</b> Mowing duration assigned to the "Start mowing" command.</li>
         </ul>
@@ -79,17 +77,12 @@ import Husqvarna
         <h3>Example Husqvarna.json</h3>
         <pre><code>
 {
-    "zones": [
-        { "name": "FrontGarden", "latitude": 50.8503, "longitude": 4.3517 },
-        { "name": "BackGarden", "latitude": 50.8400, "longitude": 4.3400 }
-    ],
     "height_min_max (cm)": { "min": 2, "max": 6, "steps": 9 },
     "update_interval (min)": { "off": 60, "cloud_error": 180, "quota_error": 30 },
-    "start_duration (min)": 360 
-
+    "start_duration (min)": 360
 }
         </code></pre>
-        <p>If this file is not present or is invalid, the plugin will revert to default values for zones (using Domoticz's configured title/location) and cutting height (min: 2, max: 6, steps: 9).</p>
+        <p>If this file is not present or is invalid, the plugin will revert to the default cutting height and timing values.</p>
     </description>
     <params>
         <param field="Mode1" label="Client_id" width="250px" required="true" default=""/>
@@ -165,7 +158,6 @@ class HusqvarnaAction(str, Enum):
 @dataclass
 class MowerConfig:
     """Configuration for Husqvarna mowers from JSON file."""
-    zones: List[Dict[str, Any]] = field(default_factory=list)
     height_min_max: Dict[str, Any] = field(default_factory=dict)
     update_interval: Dict[str, Any] = field(default_factory=dict)
     start_duration: int = field(default_factory=int)
@@ -236,37 +228,27 @@ class HusqvarnaPlugin:
             default_update_interval = { "off": 60, "cloud_error": 180, "quota_error": 30 }
             default_start_duration = 360
 
-            position_parts = Settings['Location'].split(';')
-            # Check if position_parts has at least two elements and they can be converted to float
-            if len(position_parts) >= 2 and all(isinstance(p, str) and p.strip().replace('.', '', 1).isdigit() for p in position_parts[:2]):
-                default_zones = [{"name": Settings['Title'], "latitude": float(position_parts[0]), "longitude": float(position_parts[1])}]
-            else:
-                default_zones = [] # No valid location in settings
-
             self.config.height_min_max = default_height_min_max
-            self.config.zones = default_zones
             self.config.update_interval = default_update_interval
             self.config.start_duration = default_start_duration
         
             if config_file_path.exists():
                 with open(config_file_path, 'r') as json_file:
                     config_data = json.load(json_file)
-                self.config.zones = config_data.get('zones', default_zones)
                 self.config.height_min_max = config_data.get('height_min_max (cm)', default_height_min_max)
                 self.config.update_interval = config_data.get('update_interval (min)', default_update_interval)
                 self.config.start_duration = config_data.get('start_duration (min)', default_start_duration)
-                Domoticz.Debug(f'Zones found: {self.config.zones}.')
                 Domoticz.Debug(f'Cutting height range found: {self.config.height_min_max}.')
                 Domoticz.Debug(f'Update interval settings found: {self.config.update_interval}.')
                 Domoticz.Debug(f'Start duration setting found: {self.config.start_duration}.')
             else:
-                Domoticz.Debug("Husqvarna.json not found, using default zones, cutting height, update intervals and start duration.")
+                Domoticz.Debug("Husqvarna.json not found, using default cutting height, update intervals and start duration.")
 
         except json.JSONDecodeError as err:
-            Domoticz.Error(f"Error parsing configuration file: {err}; using default zones and cutting height.")
+            Domoticz.Error(f"Error parsing configuration file: {err}; using default cutting height and timing values.")
             log_backtrace_error(Parameters)
         except Exception as err:
-            Domoticz.Error(f'Error reading Husqvarna.json configuration file: {err}; using default zones and cutting height.')
+            Domoticz.Error(f'Error reading Husqvarna.json configuration file: {err}; using default cutting height and timing values.')
             log_backtrace_error(Parameters)
 
     def _create_custom_images(self) -> None:
@@ -679,8 +661,8 @@ class HusqvarnaPlugin:
         update_device(False, Devices, mower_name, UnitId.BATTERY, mower.get('battery_pct', 0), str(mower.get('battery_pct', 0)), Image=image)
         
         # Update location
-        zone = self._determine_mower_zone(mower)
-        update_device(False, Devices, mower_name, UnitId.LOCATION, 0, zone, Image=image)
+        location_text = self._determine_mower_location(mower)
+        update_device(False, Devices, mower_name, UnitId.LOCATION, 0, location_text, Image=image)
         
         # Update cutting height
         if mower.get('cutting_height'):
@@ -758,55 +740,19 @@ class HusqvarnaPlugin:
 
         return result
 
-    def _determine_mower_zone(self, mower: Dict[str, Any]) -> str:
-        """
-        Determine the garden zone where the mower is located.
-        When the mower is in its base, this is returned as location.
-        """
+    def _determine_mower_location(self, mower: Dict[str, Any]) -> str:
+        """Return a simplified mower location string without any zone-based logic."""
         activity = mower.get('activity', '')
         if activity in (Husqvarna.Activity.CHARGING.name, Husqvarna.Activity.PARKED_IN_CS.name):
             return Husqvarna.Activity.PARKED_IN_CS.value
 
         location_data = mower.get('location')
         if location_data and location_data.get('latitude', None) is not None and location_data.get('longitude', None) is not None:
-            # Pass only the necessary parts of location to _find_nearest_zone
-            return self._find_nearest_zone({'latitude': location_data['latitude'], 'longitude': location_data['longitude']})
-        else:
-            # Return current device s_value if no valid location, or "Unknown"
-            return "Unknown"
+            latitude = float(location_data['latitude'])
+            longitude = float(location_data['longitude'])
+            return f"{latitude:.5f}, {longitude:.5f}"
 
-    def _find_nearest_zone(self, position: Dict[str, float]) -> str:
-        """Find the nearest zone based on GPS coordinates."""
-        Domoticz.Debug(f"Inside _find_nearest_zone: self.config.zones = {self.config.zones}")
-
-        if not self.config.zones:
-            Domoticz.Debug("No garden zones configured.")
-            return "Unknown"
-            
-        try:
-            # Filter for valid zones before sorting
-            valid_zones = [
-                z for z in self.config.zones 
-                if isinstance(z, dict) and 'latitude' in z and 'longitude' in z and 
-                   isinstance(z['latitude'], (int, float)) and isinstance(z['longitude'], (int, float))
-            ]
-            
-            if not valid_zones:
-                Domoticz.Debug("No valid zones (with complete coordinates) found for distance calculation.")
-                return "Unknown"
-
-            sorted_zones = sorted(
-                valid_zones,
-                key=lambda zone: get_distance(
-                    (position['latitude'], position['longitude']),
-                    (zone["latitude"], zone["longitude"])
-                )
-            )
-            Domoticz.Debug(f"Mower is located in the zone {sorted_zones[0]['name']}.")
-            return sorted_zones[0]['name']
-        except Exception as e:
-            Domoticz.Debug(f"Error finding nearest zone: {e}")
-            return "Unknown"
+        return "Unknown"
 
     def _create_mower_devices(self, mower_name: str) -> None:
         """
